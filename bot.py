@@ -1,5 +1,4 @@
-import discord
-from discord.ext import commands
+import telebot
 import threading
 import time
 import re
@@ -24,15 +23,11 @@ def safe_info(self, msg, *args, **kwargs):
     except TypeError:
         orig_info(self, msg)
 logging.Logger.info = safe_info
-# ==============================================================================
 
 TOKEN = input("Token bot: ")
 ADMIN_ID = int(input("ID admin: "))
 
-intents = discord.Intents.default()
-intents.messages = True
-intents.message_content = True
-bot = commands.Bot(command_prefix='/', intents=intents)
+bot = telebot.TeleBot(TOKEN)
 
 allowed_users = set()
 treo_threads = {}
@@ -47,7 +42,7 @@ codelag_start_times = {}
 
 UA_KIWI = [
     "Mozilla/5.0 (Linux; Android 11; RMX2185) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.140 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 12; Redmi Note 11) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.129 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; Redmi Note 11) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.129 Mobile Safari/537.36", 
     "Mozilla/5.0 (Linux; Android 13; Pixel 6a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.68 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 10; V2031) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.60 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 14; CPH2481) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.86 Mobile Safari/537.36"
@@ -315,165 +310,223 @@ def start_codelag(user_id, idbox, cookie, delay):
     thread.start()
     return "Đã bắt đầu spam code lag."
 
-@bot.command()
-async def set(ctx):
-    if ctx.author.id not in allowed_users and ctx.author.id != ADMIN_ID:
-        return await ctx.send("Bạn không có quyền sử dụng bot.")
-    if not ctx.message.attachments:
-        return await ctx.send("Vui lòng đính kèm file .txt.")
-    attachment = ctx.message.attachments[0]
-    if not attachment.filename.endswith(".txt"):
-        return await ctx.send("Chỉ chấp nhận file .txt.")
-    path = f"{ctx.author.id}_{attachment.filename}"
-    await attachment.save(path)
-    await ctx.send(f"Đã lưu file thành công dưới tên: `{path}`.")
+@bot.message_handler(commands=['set'])
+def set_command(message):
+    if message.from_user.id not in allowed_users and message.from_user.id != ADMIN_ID:
+        return bot.reply_to(message, "Bạn không có quyền sử dụng bot.")
+    if not message.document:
+        return bot.reply_to(message, "Vui lòng đính kèm file .txt.")
+    file_info = bot.get_file(message.document.file_id)
+    if not message.document.file_name.endswith(".txt"):
+        return bot.reply_to(message, "Chỉ chấp nhận file .txt.")
+    path = f"{message.from_user.id}_{message.document.file_name}"
+    downloaded_file = bot.download_file(file_info.file_path)
+    with open(path, 'wb') as new_file:
+        new_file.write(downloaded_file)
+    bot.reply_to(message, f"Đã lưu file thành công dưới tên: `{path}`.")
 
-@bot.command()
-async def treo(ctx, idbox: str, cookie: str, filename: str, delay: int):
-    if ctx.author.id not in allowed_users and ctx.author.id != ADMIN_ID:
-        return await ctx.send("Bạn không có quyền sử dụng bot.")
-    filepath = f"{ctx.author.id}_{filename}"
-    if not os.path.exists(filepath):
-        return await ctx.send("Không tìm thấy file đã set.")
-    with open(filepath, "r", encoding="utf-8") as f:
-        message = f.read()
-    result = start_spam(ctx.author.id, idbox, cookie, message, delay)
-    await ctx.send(result)
+@bot.message_handler(commands=['treo'])
+def treo_command(message):
+    if message.from_user.id not in allowed_users and message.from_user.id != ADMIN_ID:
+        return bot.reply_to(message, "Bạn không có quyền sử dụng bot.")
+    try:
+        args = message.text.split()[1:]
+        if len(args) != 4:
+            return bot.reply_to(message, "Cú pháp: /treo idbox cookie file.txt delay")
+        idbox, cookie, filename, delay = args
+        delay = int(delay)
+        filepath = f"{message.from_user.id}_{filename}"
+        if not os.path.exists(filepath):
+            return bot.reply_to(message, "Không tìm thấy file đã set.")
+        with open(filepath, "r", encoding="utf-8") as f:
+            msg = f.read()
+        result = start_spam(message.from_user.id, idbox, cookie, msg, delay)
+        bot.reply_to(message, result)
+    except Exception as e:
+        bot.reply_to(message, f"Lỗi: {str(e)}")
 
-@bot.command()
-async def stoptreo(ctx, idbox: str):
-    removed = False
-    keys_to_remove = [(uid, ib) for (uid, ib) in treo_threads if uid == ctx.author.id and ib == idbox]
-    for key in keys_to_remove:
-        treo_threads.pop(key)
-        treo_start_times.pop(key)
-        messenger_instances.pop(key)
-        removed = True
-    if removed:
-        await ctx.send(f"Đã dừng các tab treo với idbox {idbox}.")
-    else:
-        await ctx.send("Không có tab treo nào.")
+@bot.message_handler(commands=['stoptreo'])
+def stoptreo_command(message):
+    try:
+        idbox = message.text.split()[1]
+        removed = False
+        keys_to_remove = [(uid, ib) for (uid, ib) in treo_threads if uid == message.from_user.id and ib == idbox]
+        for key in keys_to_remove:
+            treo_threads.pop(key)
+            treo_start_times.pop(key)
+            messenger_instances.pop(key)
+            removed = True
+        if removed:
+            bot.reply_to(message, f"Đã dừng các tab treo với idbox {idbox}.")
+        else:
+            bot.reply_to(message, "Không có tab treo nào.")
+    except:
+        bot.reply_to(message, "Cú pháp: /stoptreo idbox")
 
-@bot.command()
-async def tabtreo(ctx):
+@bot.message_handler(commands=['tabtreo'])
+def tabtreo_command(message):
     msg = "**Danh Sách Tab treo:**\n\n"
     count = 0
     for (uid, ib), start in treo_start_times.items():
-        if uid == ctx.author.id:
+        if uid == message.from_user.id:
             uptime = format_duration(time.time() - start)
             msg += f"**{ib}:** {uptime}\n"
             count += 1
     if count == 0:
         msg = "Bạn không có tab treo nào đang chạy."
-    await ctx.send(msg)
+    bot.reply_to(message, msg)
 
-@bot.command()
-async def add(ctx, iduser: int):
-    if ctx.author.id != ADMIN_ID:
-        return await ctx.send("Chỉ admin được dùng lệnh này.")
-    allowed_users.add(iduser)
-    await ctx.send(f"Đã thêm {iduser} vào danh sách sử dụng bot.")
+@bot.message_handler(commands=['add'])
+def add_command(message):
+    if message.from_user.id != ADMIN_ID:
+        return bot.reply_to(message, "Chỉ admin được dùng lệnh này.")
+    try:
+        iduser = int(message.text.split()[1])
+        allowed_users.add(iduser)
+        bot.reply_to(message, f"Đã thêm {iduser} vào danh sách sử dụng bot.")
+    except:
+        bot.reply_to(message, "Cú pháp: /add iduser")
 
-@bot.command()
-async def xoa(ctx, iduser: int):
-    if ctx.author.id != ADMIN_ID:
-        return await ctx.send("Chỉ admin được dùng lệnh này.")
-    allowed_users.discard(iduser)
-    await ctx.send(f"Đã xóa {iduser} khỏi danh sách sử dụng bot.")
-    
-@bot.command()
-async def nhay(ctx, idbox: str, cookie: str, delay: int):
-    if ctx.author.id not in allowed_users and ctx.author.id != ADMIN_ID:
-        return await ctx.send("Bạn không có quyền sử dụng bot.")
-    result = start_nhay(ctx.author.id, idbox, cookie, delay)
-    await ctx.send(result)    
+@bot.message_handler(commands=['xoa'])
+def xoa_command(message):
+    if message.from_user.id != ADMIN_ID:
+        return bot.reply_to(message, "Chỉ admin được dùng lệnh này.")
+    try:
+        iduser = int(message.text.split()[1])
+        allowed_users.discard(iduser)
+        bot.reply_to(message, f"Đã xóa {iduser} khỏi danh sách sử dụng bot.")
+    except:
+        bot.reply_to(message, "Cú pháp: /xoa iduser")
 
-@bot.command()
-async def stopnhay(ctx, idbox: str):
-    key = (ctx.author.id, idbox)
-    if key in nhay_threads:
-        nhay_threads.pop(key)
-        nhay_start_times.pop(key)
-        await ctx.send(f"Đã dừng nhây vào {idbox}.")
-    else:
-        await ctx.send("Không có tab nhây nào đang chạy.")
+@bot.message_handler(commands=['nhay'])
+def nhay_command(message):
+    if message.from_user.id not in allowed_users and message.from_user.id != ADMIN_ID:
+        return bot.reply_to(message, "Bạn không có quyền sử dụng bot.")
+    try:
+        args = message.text.split()[1:]
+        if len(args) != 3:
+            return bot.reply_to(message, "Cú pháp: /nhay idbox cookie delay")
+        idbox, cookie, delay = args
+        delay = int(delay)
+        result = start_nhay(message.from_user.id, idbox, cookie, delay)
+        bot.reply_to(message, result)
+    except Exception as e:
+        bot.reply_to(message, f"Lỗi: {str(e)}")
 
-@bot.command()
-async def tabnhay(ctx):
+@bot.message_handler(commands=['stopnhay'])
+def stopnhay_command(message):
+    try:
+        idbox = message.text.split()[1]
+        key = (message.from_user.id, idbox)
+        if key in nhay_threads:
+            nhay_threads.pop(key)
+            nhay_start_times.pop(key)
+            bot.reply_to(message, f"Đã dừng nhây vào {idbox}.")
+        else:
+            bot.reply_to(message, "Không có tab nhây nào đang chạy.")
+    except:
+        bot.reply_to(message, "Cú pháp: /stopnhay idbox")
+
+@bot.message_handler(commands=['tabnhay'])
+def tabnhay_command(message):
     msg = "**Danh Sách Tab nhây:**\n\n"
     count = 0
     for (uid, ib), start in nhay_start_times.items():
-        if uid == ctx.author.id:
+        if uid == message.from_user.id:
             uptime = format_duration(time.time() - start)
             msg += f"**{ib}:** {uptime}\n"
             count += 1
     if count == 0:
         msg = "Bạn không có tab nhây nào đang chạy."
-    await ctx.send(msg) 
-   
-@bot.command()
-async def chui(ctx, idbox: str, cookie: str, delay: int):
-    if ctx.author.id not in allowed_users and ctx.author.id != ADMIN_ID:
-        return await ctx.send("Bạn không có quyền sử dụng bot.")
-    result = start_chui(ctx.author.id, idbox, cookie, delay)
-    await ctx.send(result)
-    
-@bot.command()
-async def stopchui(ctx, idbox: str):
-    key = (ctx.author.id, idbox)
-    if key in chui_threads:
-        chui_threads.pop(key)
-        chui_start_times.pop(key)
-        await ctx.send(f"Đã dừng gửi tin nhắn vào {idbox}.")
-    else:
-        await ctx.send("Không có tab nào đang chạy.")
- 
-@bot.command()
-async def tabchui(ctx):
+    bot.reply_to(message, msg)
+
+@bot.message_handler(commands=['chui'])
+def chui_command(message):
+    if message.from_user.id not in allowed_users and message.from_user.id != ADMIN_ID:
+        return bot.reply_to(message, "Bạn không có quyền sử dụng bot.")
+    try:
+        args = message.text.split()[1:]
+        if len(args) != 3:
+            return bot.reply_to(message, "Cú pháp: /chui idbox cookie delay")
+        idbox, cookie, delay = args
+        delay = int(delay)
+        result = start_chui(message.from_user.id, idbox, cookie, delay)
+        bot.reply_to(message, result)
+    except Exception as e:
+        bot.reply_to(message, f"Lỗi: {str(e)}")
+
+@bot.message_handler(commands=['stopchui'])
+def stopchui_command(message):
+    try:
+        idbox = message.text.split()[1]
+        key = (message.from_user.id, idbox)
+        if key in chui_threads:
+            chui_threads.pop(key)
+            chui_start_times.pop(key)
+            bot.reply_to(message, f"Đã dừng gửi tin nhắn vào {idbox}.")
+        else:
+            bot.reply_to(message, "Không có tab nào đang chạy.")
+    except:
+        bot.reply_to(message, "Cú pháp: /stopchui idbox")
+
+@bot.message_handler(commands=['tabchui'])
+def tabchui_command(message):
     msg = "**Danh Sách Tab:**\n\n"
     count = 0
     for (uid, ib), start in chui_start_times.items():
-        if uid == ctx.author.id:
+        if uid == message.from_user.id:
             uptime = format_duration(time.time() - start)
             msg += f"**{ib}:** {uptime}\n"
             count += 1
     if count == 0:
         msg = "Bạn không có tab nào đang chạy."
-    await ctx.send(msg)
-    
-@bot.command()
-async def codelag(ctx, idbox: str, cookie: str, delay: int):
-    if ctx.author.id not in allowed_users and ctx.author.id != ADMIN_ID:
-        return await ctx.send("Bạn không có quyền sử dụng bot.")
-    result = start_codelag(ctx.author.id, idbox, cookie, delay)
-    await ctx.send(result)
-             
-@bot.command()
-async def stopcodelag(ctx, idbox: str):
-    key = (ctx.author.id, idbox)
-    if key in codelag_threads:
-        codelag_threads.pop(key)
-        codelag_start_times.pop(key)
-        await ctx.send(f"Đã dừng spam code lag vào {idbox}.")
-    else:
-        await ctx.send("Không có tab code lag nào đang chạy.")
-        
-@bot.command()
-async def tabcodelag(ctx):
+    bot.reply_to(message, msg)
+
+@bot.message_handler(commands=['codelag'])
+def codelag_command(message):
+    if message.from_user.id not in allowed_users and message.from_user.id != ADMIN_ID:
+        return bot.reply_to(message, "Bạn không có quyền sử dụng bot.")
+    try:
+        args = message.text.split()[1:]
+        if len(args) != 3:
+            return bot.reply_to(message, "Cú pháp: /codelag idbox cookie delay")
+        idbox, cookie, delay = args
+        delay = int(delay)
+        result = start_codelag(message.from_user.id, idbox, cookie, delay)
+        bot.reply_to(message, result)
+    except Exception as e:
+        bot.reply_to(message, f"Lỗi: {str(e)}")
+
+@bot.message_handler(commands=['stopcodelag'])
+def stopcodelag_command(message):
+    try:
+        idbox = message.text.split()[1]
+        key = (message.from_user.id, idbox)
+        if key in codelag_threads:
+            codelag_threads.pop(key)
+            codelag_start_times.pop(key)
+            bot.reply_to(message, f"Đã dừng spam code lag vào {idbox}.")
+        else:
+            bot.reply_to(message, "Không có tab code lag nào đang chạy.")
+    except:
+        bot.reply_to(message, "Cú pháp: /stopcodelag idbox")
+
+@bot.message_handler(commands=['tabcodelag'])
+def tabcodelag_command(message):
     msg = "**Danh Sách Tab code lag:**\n\n"
     count = 0
     for (uid, ib), start in codelag_start_times.items():
-        if uid == ctx.author.id:
+        if uid == message.from_user.id:
             uptime = format_duration(time.time() - start)
             msg += f"**{ib}:** {uptime}\n"
             count += 1
     if count == 0:
         msg = "Bạn không có tab code lag nào đang chạy."
-    await ctx.send(msg)
-    
-@bot.command()
-async def menu(ctx):
-    await ctx.send(
+    bot.reply_to(message, msg)
+
+@bot.message_handler(commands=['menu'])
+def menu_command(message):
+    bot.reply_to(message,
         "**╔═══════『 MENU BOT 』═══════╗**\n\n"
         "🔹 **1. /set** - Đính kèm file txt.\n"
         "🔹 **2. /treo** `idbox \"cookie\" file.txt delay` - Treo\n"
@@ -496,4 +549,4 @@ async def menu(ctx):
         "**╚══════════════════════════╝**"
     )
 
-bot.run(TOKEN)
+bot.polling()
